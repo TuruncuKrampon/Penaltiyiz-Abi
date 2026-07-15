@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Penaltıyız Abi</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="game-canvas" width="800" height="500"></canvas>
+
+    <div id="hud-match" class="hud hidden">
+      <div class="scoreboard">
+        <span id="hud-name-a" class="hud-name"></span>
+        <span class="hud-score"><span id="hud-score-a">0</span> - <span id="hud-score-b">0</span></span>
+        <span id="hud-name-b" class="hud-name"></span>
+      </div>
+      <div class="shot-indicators">
+        <div id="hud-shots-a" class="shot-row"></div>
+        <div id="hud-shots-b" class="shot-row"></div>
+      </div>
+      <div class="turn-info">
+        <span id="hud-round-label"></span>
+        <span id="hud-turn-label"></span>
+      </div>
+    </div>
+
+    <div id="screen-menu" class="screen">
+      <h1 class="game-title">PENALTIYIZ ABİ <span class="roach-emoji">🪳</span></h1>
+      <div class="menu-buttons">
+        <button id="btn-vs-computer" class="btn btn-primary">Bilgisayara Karşı</button>
+        <button id="btn-online" class="btn btn-secondary" disabled title="Yakında geliyor">Arkadaşınla Oyna (Online) — Yakında</button>
+      </div>
+    </div>
+
+    <div id="screen-team-select" class="screen hidden">
+      <h2>Formanı Seç</h2>
+      <div class="team-swatches">
+        <button class="team-swatch" data-team-id="team1">
+          <span class="swatch-preview swatch-team1"></span>
+          Sarı-Lacivert
+        </button>
+        <button class="team-swatch" data-team-id="team2">
+          <span class="swatch-preview swatch-team2"></span>
+          Sarı-Kırmızı
+        </button>
+        <button class="team-swatch" data-team-id="team3">
+          <span class="swatch-preview swatch-team3"></span>
+          Siyah-Beyaz
+        </button>
+      </div>
+      <p id="cpu-team-preview" class="cpu-preview hidden"></p>
+      <button id="btn-team-continue" class="btn btn-primary" disabled>Devam</button>
+    </div>
+
+    <div id="screen-name-entry" class="screen hidden">
+      <h2>İsmini Gir</h2>
+      <label class="name-field">
+        Senin ismin:
+        <input id="input-name-a" type="text" value="Böcek 1" maxlength="16">
+      </label>
+      <p class="name-field-static">Rakip: <span id="name-b-display">Bilgisayar</span></p>
+      <button id="btn-start-match" class="btn btn-primary">Maçı Başlat</button>
+    </div>
+
+    <div id="screen-match-end" class="screen hidden">
+      <h2 id="match-end-title"></h2>
+      <p id="match-end-score" class="match-end-score"></p>
+      <div class="menu-buttons">
+        <button id="btn-replay" class="btn btn-primary">Tekrar Oyna</button>
+        <button id="btn-back-menu" class="btn btn-secondary">Ana Menü</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/roach.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
