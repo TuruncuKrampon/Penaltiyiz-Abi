@@ -41,12 +41,12 @@ export const BALANCE = {
      * Base save probability when the keeper commits to the correct column,
      * by row: keepers are stronger on low balls.
      */
-    saveIfCorrectColumnLow: 0.78,
-    saveIfCorrectColumnHigh: 0.52,
+    saveIfCorrectColumnLow: 0.8,
+    saveIfCorrectColumnHigh: 0.58,
     /** Keeper covering center column gets a bonus on low-center shots. */
     lowCenterExtraSave: 0.12,
     /** Wrong column: tiny chance of a trailing-leg fluke save on center row shots. */
-    saveIfWrongColumn: 0.04,
+    saveIfWrongColumn: 0.06,
     /** Chance the shot clips the post on extreme aim + very high power. */
     postChanceExtremeAim: 0.12,
     /** Power above this counts as "very high" for post logic. */
