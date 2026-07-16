@@ -3,7 +3,7 @@ import { COLORS, FONTS, GAME_WIDTH, GAME_HEIGHT } from '../config/theme';
 import { BALANCE } from '../config/balance';
 import { TR } from '../config/tr';
 import { attachFpsOverlay, drawZoneGrid } from '../systems/debug';
-import { getMatchSettings, SKIN_COLORS, loadStreak, saveStreak } from '../systems/settings';
+import { getMatchSettings, loadStreak, saveStreak } from '../systems/settings';
 import type { MatchSettings, PlayerConfig } from '../systems/settings';
 import { Shootout } from '../systems/shootout';
 import type { Side, Outcome } from '../systems/shootout';
@@ -12,11 +12,14 @@ import type { Column, KickResult } from '../systems/kickResolver';
 import { cpuKeeperColumn, cpuKeeperSavePenalty, cpuShotPlan } from '../systems/cpu';
 import { rng } from '../systems/rng';
 import { Scoreboard } from '../ui/scoreboard';
+import { charKey, ENV_KEYS, hasRealTexture } from '../systems/assets';
 
 /** Goal mouth rect in world coordinates (shared by aim, keeper, debug grid). */
 export const GOAL_RECT = { x: 390, y: 180, width: 500, height: 190 };
 const PENALTY_SPOT = { x: 640, y: 600 };
-const KEEPER_BASE = { x: 640, y: GOAL_RECT.y + GOAL_RECT.height - 8 };
+const KEEPER_BASE = { x: 640, y: GOAL_RECT.y + GOAL_RECT.height + 2 };
+const KICKER_START = { x: PENALTY_SPOT.x - 110, y: PENALTY_SPOT.y + 8 };
+const KICKER_CONTACT = { x: PENALTY_SPOT.x - 30, y: PENALTY_SPOT.y + 4 };
 
 type Phase =
   | 'idle'
@@ -44,11 +47,15 @@ export class MatchScene extends Phaser.Scene {
   private keeperCommit: Column | null = null;
   private keeperLocked: Column = 1;
   private cpuPlan: { aimX: number; aimY: number; power: number } | null = null;
+  private runTimer: Phaser.Time.TimerEvent | null = null;
 
   // display objects
-  private kicker!: Phaser.GameObjects.Container;
-  private keeper!: Phaser.GameObjects.Container;
-  private ball!: Phaser.GameObjects.Arc;
+  private kicker!: Phaser.GameObjects.Sprite;
+  private keeper!: Phaser.GameObjects.Sprite;
+  private kickerShadow!: Phaser.GameObjects.Ellipse;
+  private keeperShadow!: Phaser.GameObjects.Ellipse;
+  private ballShadow!: Phaser.GameObjects.Ellipse;
+  private ball!: Phaser.GameObjects.Image;
   private reticle!: Phaser.GameObjects.Container;
   private powerBar!: Phaser.GameObjects.Container;
   private powerFill!: Phaser.GameObjects.Rectangle;
@@ -88,20 +95,30 @@ export class MatchScene extends Phaser.Scene {
   // ---------- scene construction ----------
 
   private buildPitch(): void {
-    // stands
-    this.add.rectangle(GAME_WIDTH / 2, 105, GAME_WIDTH, 210, 0x1a2440);
-    // grass
-    this.add.rectangle(GAME_WIDTH / 2, (210 + GAME_HEIGHT) / 2, GAME_WIDTH, GAME_HEIGHT - 210, COLORS.grassDark);
-    // mow stripes (flat for gray-box; perspective arrives in M2)
-    for (let i = 0; i < 6; i++) {
-      if (i % 2 === 0) continue;
-      this.add.rectangle(GAME_WIDTH / 2, 252 + i * 85, GAME_WIDTH, 85, COLORS.grassLight, 0.5);
+    if (hasRealTexture(this, ENV_KEYS.stadium)) {
+      const img = this.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, ENV_KEYS.stadium);
+      const scale = Math.max(GAME_WIDTH / img.width, GAME_HEIGHT / img.height);
+      img.setScale(scale).setDepth(0);
+    } else {
+      // gray-box stadium
+      this.add.rectangle(GAME_WIDTH / 2, 105, GAME_WIDTH, 210, 0x1a2440);
+      this.add.rectangle(
+        GAME_WIDTH / 2,
+        (210 + GAME_HEIGHT) / 2,
+        GAME_WIDTH,
+        GAME_HEIGHT - 210,
+        COLORS.grassDark
+      );
+      for (let i = 0; i < 6; i++) {
+        if (i % 2 === 0) continue;
+        this.add.rectangle(GAME_WIDTH / 2, 252 + i * 85, GAME_WIDTH, 85, COLORS.grassLight, 0.5);
+      }
     }
-    // goal frame
-    const g = this.add.graphics();
+
+    // goal frame is always drawn in-engine so lines stay crisp
+    const g = this.add.graphics().setDepth(100);
     g.lineStyle(6, COLORS.chalk, 1);
     g.strokeRect(GOAL_RECT.x, GOAL_RECT.y, GOAL_RECT.width, GOAL_RECT.height);
-    // simple net lines
     g.lineStyle(1, COLORS.chalk, 0.25);
     for (let i = 1; i < 12; i++) {
       const nx = GOAL_RECT.x + (GOAL_RECT.width / 12) * i;
@@ -111,53 +128,59 @@ export class MatchScene extends Phaser.Scene {
       const ny = GOAL_RECT.y + (GOAL_RECT.height / 5) * i;
       g.lineBetween(GOAL_RECT.x, ny, GOAL_RECT.x + GOAL_RECT.width, ny);
     }
-    // penalty spot
-    this.add.circle(PENALTY_SPOT.x, PENALTY_SPOT.y, 5, COLORS.chalk, 0.9);
+    this.add.circle(PENALTY_SPOT.x, PENALTY_SPOT.y, 5, COLORS.chalk, 0.9).setDepth(90);
   }
 
-  private capsule(player: PlayerConfig, w: number, h: number, label: string): Phaser.GameObjects.Container {
-    const colors = SKIN_COLORS[player.skin];
-    const body = this.add.rectangle(0, 0, w, h, colors.primary).setStrokeStyle(2, colors.secondary);
-    const head = this.add.circle(0, -h / 2 - w * 0.28, w * 0.32, colors.secondary);
-    const tag = this.add
-      .text(0, h / 2 + 14, label, {
-        fontFamily: FONTS.body,
-        fontSize: '13px',
-        color: COLORS.chalkCss
-      })
-      .setOrigin(0.5)
-      .setAlpha(0.8);
-    return this.add.container(0, 0, [body, head, tag]);
+  private normalizeHeight(sprite: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image, target: number): void {
+    const tex = sprite.texture.getSourceImage() as { width: number; height: number };
+    const scale = target / tex.height;
+    sprite.setScale(scale);
   }
 
   private buildActors(): void {
+    this.kickerShadow = this.add
+      .ellipse(KICKER_START.x, KICKER_START.y + 6, 110, 26, 0x000000, 0.3)
+      .setDepth(200);
+    this.keeperShadow = this.add
+      .ellipse(KEEPER_BASE.x, KEEPER_BASE.y + 4, 70, 16, 0x000000, 0.3)
+      .setDepth(140);
+    this.ballShadow = this.add
+      .ellipse(PENALTY_SPOT.x, PENALTY_SPOT.y + 10, 34, 10, 0x000000, 0.35)
+      .setDepth(200);
+
     const kickerCfg = this.playerOf(this.shootout.currentKicker());
-    this.kicker = this.capsule(kickerCfg, 56, 130, 'ATICI');
-    this.kicker.setPosition(PENALTY_SPOT.x - 90, PENALTY_SPOT.y - 60).setDepth(300);
+    this.kicker = this.add
+      .sprite(KICKER_START.x, KICKER_START.y, charKey(kickerCfg.skin, 'kicker_idle'))
+      .setOrigin(0.5, 1)
+      .setDepth(300);
+    this.normalizeHeight(this.kicker, BALANCE.characters.kickerHeight);
 
     const keeperCfg = this.playerOf(this.otherSide(this.shootout.currentKicker()));
-    this.keeper = this.capsule(keeperCfg, 34, 78, 'KALECİ');
-    this.keeper.setPosition(KEEPER_BASE.x, KEEPER_BASE.y - 40).setDepth(150);
+    this.keeper = this.add
+      .sprite(KEEPER_BASE.x, KEEPER_BASE.y, charKey(keeperCfg.skin, 'keeper_idle'))
+      .setOrigin(0.5, 1)
+      .setDepth(150);
+    this.normalizeHeight(this.keeper, BALANCE.characters.keeperHeight);
 
     this.ball = this.add
-      .circle(PENALTY_SPOT.x, PENALTY_SPOT.y, BALANCE.characters.ballDiameter / 2, COLORS.white)
-      .setStrokeStyle(2, 0x222222)
+      .image(PENALTY_SPOT.x, PENALTY_SPOT.y, ENV_KEYS.ball)
       .setDepth(310);
+    this.ball.setDisplaySize(BALANCE.characters.ballDiameter, BALANCE.characters.ballDiameter);
   }
 
   private buildUi(): void {
-    // reticle
     const ring = this.add.circle(0, 0, 18).setStrokeStyle(3, COLORS.turuncu, 1);
     const dot = this.add.circle(0, 0, 3, COLORS.turuncu);
     const lineH = this.add.rectangle(0, 0, 46, 2, COLORS.turuncu, 0.7);
     const lineV = this.add.rectangle(0, 0, 2, 46, COLORS.turuncu, 0.7);
     this.reticle = this.add.container(0, 0, [lineH, lineV, ring, dot]).setDepth(400).setVisible(false);
 
-    // power bar
     const barW = 520;
     const barBg = this.add.rectangle(0, 0, barW, 26, COLORS.panel).setStrokeStyle(2, COLORS.chalk, 0.5);
     const sweetW = (barW * (BALANCE.power.sweetSpotMax - BALANCE.power.sweetSpotMin)) / 100;
-    const sweetX = -barW / 2 + (barW * (BALANCE.power.sweetSpotMin + (BALANCE.power.sweetSpotMax - BALANCE.power.sweetSpotMin) / 2)) / 100;
+    const sweetX =
+      -barW / 2 +
+      (barW * (BALANCE.power.sweetSpotMin + (BALANCE.power.sweetSpotMax - BALANCE.power.sweetSpotMin) / 2)) / 100;
     const sweet = this.add.rectangle(sweetX, 0, sweetW, 26, COLORS.turuncu, 0.35);
     this.powerFill = this.add.rectangle(-barW / 2, 0, 0, 18, COLORS.turuncu).setOrigin(0, 0.5);
     this.powerMarker = this.add.triangle(-barW / 2, -22, 0, 0, 14, 0, 7, 12, COLORS.chalk);
@@ -308,16 +331,36 @@ export class MatchScene extends Phaser.Scene {
     this.inputLockedUntil = this.time.now + 160;
   }
 
+  private setKickerPose(pose: 'kicker_idle' | 'kicker_run_a' | 'kicker_run_b' | 'kicker_kick' | 'celebrate' | 'keeper_sad'): void {
+    const cfg = this.playerOf(this.kickerSide());
+    this.kicker.setTexture(charKey(cfg.skin, pose));
+    this.normalizeHeight(this.kicker, BALANCE.characters.kickerHeight);
+  }
+
+  private setKeeperPose(pose: 'keeper_idle' | 'keeper_dive' | 'keeper_save' | 'keeper_sad', flipX = false): void {
+    const cfg = this.playerOf(this.otherSide(this.kickerSide()));
+    this.keeper.setTexture(charKey(cfg.skin, pose));
+    this.keeper.setFlipX(flipX);
+    this.normalizeHeight(this.keeper, BALANCE.characters.keeperHeight);
+  }
+
   private refreshActors(): void {
-    const kickerCfg = this.playerOf(this.kickerSide());
-    const keeperCfg = this.playerOf(this.otherSide(this.kickerSide()));
-    this.kicker.destroy();
-    this.keeper.destroy();
-    this.kicker = this.capsule(kickerCfg, 56, 130, 'ATICI');
-    this.kicker.setPosition(PENALTY_SPOT.x - 90, PENALTY_SPOT.y - 60).setDepth(300);
-    this.keeper = this.capsule(keeperCfg, 34, 78, 'KALECİ');
-    this.keeper.setPosition(KEEPER_BASE.x, KEEPER_BASE.y - 40).setDepth(150);
-    this.ball.setPosition(PENALTY_SPOT.x, PENALTY_SPOT.y).setScale(1).setVisible(true);
+    this.runTimer?.remove();
+    this.runTimer = null;
+
+    this.kicker.setPosition(KICKER_START.x, KICKER_START.y).setAngle(0);
+    this.setKickerPose('kicker_idle');
+    this.kickerShadow.setPosition(KICKER_START.x, KICKER_START.y + 6);
+
+    this.keeper.setPosition(KEEPER_BASE.x, KEEPER_BASE.y).setAngle(0);
+    this.setKeeperPose('keeper_idle');
+    this.keeperShadow.setPosition(KEEPER_BASE.x, KEEPER_BASE.y + 4);
+
+    this.ball
+      .setPosition(PENALTY_SPOT.x, PENALTY_SPOT.y)
+      .setVisible(true);
+    this.ball.setDisplaySize(BALANCE.characters.ballDiameter, BALANCE.characters.ballDiameter);
+    this.ballShadow.setPosition(PENALTY_SPOT.x, PENALTY_SPOT.y + 10).setScale(1).setAlpha(0.35);
   }
 
   private goalPoint(fx: number, fy: number): { x: number; y: number } {
@@ -360,7 +403,6 @@ export class MatchScene extends Phaser.Scene {
     } else if (this.kickerIsHuman()) {
       this.beginAiming();
     } else {
-      // CPU shooter: plan silently, brief pause, then run-up (human keeps).
       this.cpuPlan = cpuShotPlan(this.settings.difficulty, rng);
       this.phaseLabel.setText(TR.match.phaseRunup);
       this.setPhase('idle');
@@ -395,16 +437,27 @@ export class MatchScene extends Phaser.Scene {
     if (this.keeperIsHuman()) this.keeperButtons.setVisible(true);
     this.setPhase('runup');
 
-    // kicker run-up animation (gray-box: slide toward the ball)
-    this.tweens.add({
-      targets: this.kicker,
-      x: PENALTY_SPOT.x - 26,
-      y: PENALTY_SPOT.y - 62,
-      duration: BALANCE.runup.durationMs,
-      ease: 'Quad.easeIn'
+    // run cycle: alternate run_a / run_b at configured fps
+    let runFrame = 0;
+    this.setKickerPose('kicker_run_a');
+    this.runTimer = this.time.addEvent({
+      delay: 1000 / BALANCE.characters.runCycleFps,
+      loop: true,
+      callback: () => {
+        runFrame++;
+        this.setKickerPose(runFrame % 2 === 0 ? 'kicker_run_a' : 'kicker_run_b');
+      }
     });
 
-    // keeper input locks slightly before contact
+    this.tweens.add({
+      targets: this.kicker,
+      x: KICKER_CONTACT.x,
+      y: KICKER_CONTACT.y,
+      duration: BALANCE.runup.durationMs,
+      ease: 'Quad.easeIn',
+      onUpdate: () => this.kickerShadow.setPosition(this.kicker.x, this.kicker.y + 6)
+    });
+
     this.time.delayedCall(
       BALANCE.runup.durationMs - BALANCE.runup.keeperLockBeforeContactMs,
       () => {
@@ -428,6 +481,9 @@ export class MatchScene extends Phaser.Scene {
   }
 
   private resolveAndFly(): void {
+    this.runTimer?.remove();
+    this.runTimer = null;
+
     const input = this.cpuPlan ?? { aimX: this.aimX, aimY: this.aimY, power: this.power };
     const keeperPenalty = this.keeperIsHuman() ? 0 : cpuKeeperSavePenalty(this.settings.difficulty);
 
@@ -445,6 +501,7 @@ export class MatchScene extends Phaser.Scene {
     this.keeperButtons.setVisible(false);
     this.phaseLabel.setText('');
     this.setPhase('flight');
+    this.setKickerPose('kicker_kick');
 
     const flightMs = Phaser.Math.Linear(
       BALANCE.power.flightMsSlow,
@@ -452,38 +509,57 @@ export class MatchScene extends Phaser.Scene {
       Phaser.Math.Clamp(input.power / 100, 0, 1)
     );
 
-    // keeper dive
-    this.tweens.add({
-      targets: this.keeper,
-      x: this.columnCenterX(result.keeperColumn),
-      y: KEEPER_BASE.y - 40 - (result.row === 0 ? 46 : 6),
-      angle: result.keeperColumn === 1 ? 0 : result.keeperColumn === 0 ? -55 : 55,
-      duration: flightMs * 0.9,
-      ease: 'Quad.easeOut'
-    });
+    // keeper dive: dive sprite is drawn diving LEFT; flip for right dives
+    if (result.keeperColumn === 1) {
+      this.setKeeperPose('keeper_dive', rng.chance(0.5));
+      this.tweens.add({
+        targets: this.keeper,
+        y: KEEPER_BASE.y - (result.row === 0 ? 40 : 4),
+        duration: flightMs * 0.9,
+        ease: 'Quad.easeOut'
+      });
+    } else {
+      this.setKeeperPose('keeper_dive', result.keeperColumn === 2);
+      this.tweens.add({
+        targets: this.keeper,
+        x: this.columnCenterX(result.keeperColumn),
+        y: KEEPER_BASE.y - (result.row === 0 ? 46 : 6),
+        angle: result.keeperColumn === 0 ? -18 : 18,
+        duration: flightMs * 0.9,
+        ease: 'Quad.easeOut',
+        onUpdate: () => this.keeperShadow.setPosition(this.keeper.x, KEEPER_BASE.y + 4)
+      });
+    }
 
-    // ball flight
     let end = this.goalPoint(result.ballX, result.ballY);
     if (result.outcome === 'save') {
       end = { x: this.columnCenterX(result.keeperColumn), y: KEEPER_BASE.y - 60 };
     }
 
+    const startX = this.ball.x;
+    const startY = this.ball.y;
+    const groundStartY = PENALTY_SPOT.y + 10;
+    const groundEndY = GOAL_RECT.y + GOAL_RECT.height + 6;
+
     this.tweens.add({
       targets: this.ball,
       x: end.x,
       y: end.y,
-      scale: BALANCE.characters.ballFlightEndScale,
       duration: flightMs,
       ease: 'Quad.easeOut',
+      onUpdate: (tween) => {
+        const t = tween.progress;
+        const d = BALANCE.characters.ballDiameter *
+          Phaser.Math.Linear(1, BALANCE.characters.ballFlightEndScale, t);
+        this.ball.setDisplaySize(d, d);
+        this.ball.setAngle(this.ball.angle + 14);
+        // shadow slides along the ground toward the goal line
+        const gx = Phaser.Math.Linear(startX, end.x, t);
+        const gy = Phaser.Math.Linear(groundStartY, groundEndY, t);
+        this.ballShadow.setPosition(gx, gy).setScale(1 - t * 0.55).setAlpha(0.35 * (1 - t * 0.4));
+        void startY;
+      },
       onComplete: () => this.showOutcome(result)
-    });
-
-    // kick pose (gray-box: small hop back)
-    this.tweens.add({
-      targets: this.kicker,
-      x: PENALTY_SPOT.x - 48,
-      duration: 200,
-      ease: 'Quad.easeOut'
     });
   }
 
@@ -491,15 +567,23 @@ export class MatchScene extends Phaser.Scene {
     this.setPhase('outcome');
 
     if (result.outcome === 'post') {
-      // small bounce-out after hitting the post
       this.tweens.add({
         targets: this.ball,
         x: this.ball.x + (result.ballX < 0.5 ? -70 : 70),
         y: this.ball.y + 60,
-        scale: BALANCE.characters.ballFlightEndScale * 0.9,
         duration: 260,
         ease: 'Quad.easeOut'
       });
+    }
+
+    // keeper reaction
+    if (result.outcome === 'save') {
+      this.setKeeperPose('keeper_save');
+      this.keeper.setAngle(0).setPosition(this.columnCenterX(result.keeperColumn), KEEPER_BASE.y);
+    } else if (result.outcome === 'goal') {
+      this.setKeeperPose('keeper_sad');
+      this.keeper.setAngle(0);
+      this.setKickerPose('celebrate');
     }
 
     const text =
@@ -577,7 +661,6 @@ export class MatchScene extends Phaser.Scene {
         this.beginRunup();
         break;
       case 'runup':
-        // pointer during run-up belongs to a human keeper choosing a third
         if (this.keeperIsHuman()) {
           const third = Math.min(2, Math.floor((pointer.x / GAME_WIDTH) * 3)) as Column;
           this.commitKeeper(third);
@@ -599,7 +682,6 @@ export class MatchScene extends Phaser.Scene {
     }
 
     if (e.code === 'Space' || e.code === 'Enter') {
-      // Reuse the pointer path for ACTION (debounce included there).
       this.onPointerUp(this.input.activePointer);
     }
   }
@@ -607,17 +689,10 @@ export class MatchScene extends Phaser.Scene {
   private commitKeeper(c: Column): void {
     if (this.phase !== 'runup' || !this.keeperIsHuman()) return;
     this.keeperCommit = c;
-    // subtle feedback: pulse the chosen button
-    const items = this.keeperButtons.list.filter(
-      o => o instanceof Phaser.GameObjects.Rectangle && o.getData('col') === c
-    );
-    items.forEach(o => {
-      const rect = o as Phaser.GameObjects.Rectangle;
-      rect.setStrokeStyle(3, COLORS.turuncu, 1);
-    });
     this.keeperButtons.list.forEach(o => {
-      if (o instanceof Phaser.GameObjects.Rectangle && o.getData('col') !== c) {
-        o.setStrokeStyle(2, COLORS.chalk, 0.5);
+      if (o instanceof Phaser.GameObjects.Rectangle) {
+        const isChosen = o.getData('col') === c;
+        o.setStrokeStyle(isChosen ? 3 : 2, isChosen ? COLORS.turuncu : COLORS.chalk, isChosen ? 1 : 0.5);
       }
     });
   }

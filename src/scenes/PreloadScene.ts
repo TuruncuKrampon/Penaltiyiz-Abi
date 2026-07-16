@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS, FONTS, GAME_WIDTH, GAME_HEIGHT } from '../config/theme';
 import { TR } from '../config/tr';
+import { queueAssetManifest, generatePlaceholders } from '../systems/assets';
 
 /**
  * Shows a progress bar while assets load, and blocks until the web fonts
@@ -43,7 +44,7 @@ export class PreloadScene extends Phaser.Scene {
       this.tryContinue();
     });
 
-    // Real asset manifest arrives in M2; nothing heavy to load yet.
+    queueAssetManifest(this);
 
     document.fonts.ready.then(() => {
       // Force both faces to actually load (fonts.ready resolves even if unused).
@@ -62,6 +63,7 @@ export class PreloadScene extends Phaser.Scene {
   }
 
   create(): void {
+    generatePlaceholders(this);
     this.loadDone = true;
     this.tryContinue();
   }
