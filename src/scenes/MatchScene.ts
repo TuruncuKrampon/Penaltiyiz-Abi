@@ -13,6 +13,14 @@ import { cpuKeeperColumn, cpuKeeperSavePenalty, cpuShotPlan } from '../systems/c
 import { rng } from '../systems/rng';
 import { Scoreboard } from '../ui/scoreboard';
 import { charKey, ENV_KEYS, hasRealTexture } from '../systems/assets';
+import { sfx } from '../systems/audio';
+import {
+  impactMoment, cameraShake, resetTimeScale, announcerSlam,
+  ballTrail, netRipple
+} from '../systems/juice';
+import {
+  playToxicCelebration, playKeeperSulk, playBesiktasCelebration
+} from '../systems/celebrations';
 
 /** Goal mouth rect in world coordinates (shared by aim, keeper, debug grid). */
 export const GOAL_RECT = { x: 390, y: 180, width: 500, height: 190 };
@@ -65,6 +73,7 @@ export class MatchScene extends Phaser.Scene {
   private shotCounter!: Phaser.GameObjects.Text;
   private handoverGroup!: Phaser.GameObjects.Container;
   private keeperButtons!: Phaser.GameObjects.Container;
+  private netContainer!: Phaser.GameObjects.Container;
 
   constructor() {
     super('Match');
@@ -88,6 +97,18 @@ export class MatchScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown', (e: KeyboardEvent) => this.onKeyDown(e));
 
     drawZoneGrid(this, GOAL_RECT, BALANCE.aim.columns, BALANCE.aim.rows);
+
+    // audio needs a user gesture; the crowd fades in on the first tap
+    sfx.unlock();
+    sfx.startCrowdLoop();
+    this.input.once('pointerdown', () => {
+      sfx.unlock();
+      sfx.startCrowdLoop();
+    });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      sfx.stopCrowdLoop();
+      resetTimeScale(this);
+    });
 
     this.startKick();
   }
@@ -116,18 +137,25 @@ export class MatchScene extends Phaser.Scene {
     }
 
     // goal frame is always drawn in-engine so lines stay crisp
-    const g = this.add.graphics().setDepth(100);
-    g.lineStyle(6, COLORS.chalk, 1);
-    g.strokeRect(GOAL_RECT.x, GOAL_RECT.y, GOAL_RECT.width, GOAL_RECT.height);
-    g.lineStyle(1, COLORS.chalk, 0.25);
+    const frame = this.add.graphics().setDepth(100);
+    frame.lineStyle(6, COLORS.chalk, 1);
+    frame.strokeRect(GOAL_RECT.x, GOAL_RECT.y, GOAL_RECT.width, GOAL_RECT.height);
+
+    // net lives in its own centered container so it can ripple on goals
+    const cx = GOAL_RECT.x + GOAL_RECT.width / 2;
+    const cy = GOAL_RECT.y + GOAL_RECT.height / 2;
+    const net = this.add.graphics();
+    net.lineStyle(1, COLORS.chalk, 0.25);
     for (let i = 1; i < 12; i++) {
-      const nx = GOAL_RECT.x + (GOAL_RECT.width / 12) * i;
-      g.lineBetween(nx, GOAL_RECT.y, nx, GOAL_RECT.y + GOAL_RECT.height);
+      const nx = -GOAL_RECT.width / 2 + (GOAL_RECT.width / 12) * i;
+      net.lineBetween(nx, -GOAL_RECT.height / 2, nx, GOAL_RECT.height / 2);
     }
     for (let i = 1; i < 5; i++) {
-      const ny = GOAL_RECT.y + (GOAL_RECT.height / 5) * i;
-      g.lineBetween(GOAL_RECT.x, ny, GOAL_RECT.x + GOAL_RECT.width, ny);
+      const ny = -GOAL_RECT.height / 2 + (GOAL_RECT.height / 5) * i;
+      net.lineBetween(-GOAL_RECT.width / 2, ny, GOAL_RECT.width / 2, ny);
     }
+    this.netContainer = this.add.container(cx, cy, [net]).setDepth(99);
+
     this.add.circle(PENALTY_SPOT.x, PENALTY_SPOT.y, 5, COLORS.chalk, 0.9).setDepth(90);
   }
 
@@ -425,6 +453,7 @@ export class MatchScene extends Phaser.Scene {
   }
 
   private beginAiming(): void {
+    sfx.whistle();
     this.phaseLabel.setText(TR.match.phaseAimX);
     this.reticle.setVisible(true);
     this.setPhase('aimX');
@@ -503,6 +532,12 @@ export class MatchScene extends Phaser.Scene {
     this.setPhase('flight');
     this.setKickerPose('kicker_kick');
 
+    sfx.kickThump();
+    impactMoment(this, { decisive: this.shootout.isDecisiveKick(this.kickerSide()) });
+    const stopTrail = ballTrail(this, this.ball);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, stopTrail);
+    this.time.delayedCall(2500, stopTrail);
+
     const flightMs = Phaser.Math.Linear(
       BALANCE.power.flightMsSlow,
       BALANCE.power.flightMsFast,
@@ -576,39 +611,47 @@ export class MatchScene extends Phaser.Scene {
       });
     }
 
-    // keeper reaction
-    if (result.outcome === 'save') {
-      this.setKeeperPose('keeper_save');
-      this.keeper.setAngle(0).setPosition(this.columnCenterX(result.keeperColumn), KEEPER_BASE.y);
-    } else if (result.outcome === 'goal') {
+    // reactions + outcome-specific juice
+    let text: string;
+    let nextDelay = 1400;
+    if (result.outcome === 'goal') {
+      text = TR.match.announcerGoal;
       this.setKeeperPose('keeper_sad');
       this.keeper.setAngle(0);
       this.setKickerPose('celebrate');
+      sfx.netSwish();
+      sfx.crowdRoar();
+      netRipple(this, this.netContainer);
+      playToxicCelebration(this, this.kicker);
+      playKeeperSulk(this, this.keeper);
+      if (this.playerOf(this.kickerSide()).skin === 'bw') {
+        playBesiktasCelebration(this, this.kicker);
+      }
+      nextDelay = BALANCE.celebrations.durationMs + 400;
+    } else if (result.outcome === 'save') {
+      text = TR.match.announcerSave;
+      this.setKeeperPose('keeper_save');
+      this.keeper.setAngle(0).setPosition(this.columnCenterX(result.keeperColumn), KEEPER_BASE.y);
+      cameraShake(this);
+      sfx.saveThud();
+      sfx.crowdGroan();
+    } else if (result.outcome === 'post') {
+      text = TR.match.announcerPost;
+      cameraShake(this);
+      sfx.postClank();
+      sfx.crowdGroan();
+    } else {
+      text = TR.match.announcerMiss;
+      sfx.crowdGroan();
     }
 
-    const text =
-      result.outcome === 'goal'
-        ? TR.match.announcerGoal
-        : result.outcome === 'save'
-          ? TR.match.announcerSave
-          : result.outcome === 'post'
-            ? TR.match.announcerPost
-            : TR.match.announcerMiss;
-
-    this.announcer.setText(text).setVisible(true).setScale(0.4).setAlpha(0);
-    this.tweens.add({
-      targets: this.announcer,
-      alpha: 1,
-      scale: 1,
-      duration: 240,
-      ease: 'Back.easeOut'
-    });
+    announcerSlam(this, this.announcer, text);
 
     const side = this.kickerSide();
     this.shootout.recordKick(side, result.outcome as Outcome);
     this.scoreboard.update(this.shootout, TR.match.suddenDeath);
 
-    this.time.delayedCall(1400, () => {
+    this.time.delayedCall(nextDelay, () => {
       const winner = this.shootout.winner();
       if (winner) {
         this.endMatch(winner);

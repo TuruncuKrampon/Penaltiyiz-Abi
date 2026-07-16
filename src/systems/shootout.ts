@@ -47,6 +47,20 @@ export class Shootout {
   }
 
   /**
+   * True if the upcoming kick can mathematically end the match with at
+   * least one of its outcomes — used to trigger slow-motion drama.
+   */
+  isDecisiveKick(side: Side): boolean {
+    for (const o of ['goal', 'miss'] as Outcome[]) {
+      this.kicks[side].push(o);
+      const w = this.winner();
+      this.kicks[side].pop();
+      if (w) return true;
+    }
+    return false;
+  }
+
+  /**
    * Returns the winning side if the shootout is mathematically decided,
    * otherwise null.
    */

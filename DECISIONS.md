@@ -26,3 +26,21 @@ Non-obvious engineering decisions, newest last.
 5. **Toxic celebrations use sounds, not bubbles (owner request).** The 6 random
    goal celebrations play laugh variants (and a white-noise "şşşş" hush for the
    finger-on-lips one) instead of emoji speech bubbles.
+
+6. **Assets under src/assets via import.meta.glob, not public/.** The manifest
+   is discovered at build time, so a missing sprite never triggers a network
+   request — no 404s, zero console errors, and the placeholder fallback kicks
+   in deterministically. Adding a file just requires a rebuild (Cloudflare
+   Pages rebuilds on every push, so contributors only ever "add file + push").
+   `tools/slice.py` writes directly into `src/assets/chars/<skin>/`.
+
+7. **All SFX synthesized with WebAudio, zero shipped audio files.** Laughs are
+   sawtooth "ha" bursts with formant-ish noise, the hush is band-passed noise,
+   crowd is filtered looping noise with an LFO. Keeps payload at 0 bytes for
+   audio and sidesteps CC0 sourcing entirely. The only optional audio file is
+   the user-supplied `src/assets/audio/babaniz-besiktas.mp3`.
+
+8. **Freeze-frame/slow-mo via scene.tweens.timeScale + scene.time.timeScale**
+   driven by real-time `setTimeout`s, so the effect that manipulates game time
+   is itself immune to it. `prefers-reduced-motion` disables freeze, shake and
+   slow-mo entirely.

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { COLORS, FONTS } from '../config/theme';
+import { sfx } from '../systems/audio';
 
 export interface ButtonOptions {
   width?: number;
@@ -56,6 +57,8 @@ export function createButton(
     scene.tweens.add({ targets: container, scale: 0.95, duration: 60, ease: 'Sine.easeOut' });
   });
   bg.on('pointerup', () => {
+    sfx.unlock();
+    sfx.uiClick();
     scene.tweens.add({
       targets: container,
       scale: 1.05,

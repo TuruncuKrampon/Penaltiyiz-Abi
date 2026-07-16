@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
-import { COLORS, FONTS, GAME_WIDTH } from '../config/theme';
+import { COLORS, FONTS, GAME_WIDTH, GAME_HEIGHT } from '../config/theme';
 import { TR } from '../config/tr';
 import { createButton } from '../ui/button';
 import { attachFpsOverlay } from '../systems/debug';
+import { confettiBurst } from '../systems/juice';
+import { sfx } from '../systems/audio';
 
 interface ResultData {
   winnerName: string;
@@ -40,6 +42,8 @@ export class ResultScene extends Phaser.Scene {
       .setScale(0.6)
       .setAlpha(0);
     this.tweens.add({ targets: banner, alpha: 1, scale: 1, duration: 400, ease: 'Back.easeOut' });
+    confettiBurst(this, cx, GAME_HEIGHT * 0.35);
+    sfx.crowdRoar();
 
     this.add
       .text(cx, 300, `${TR.result.finalScore}: ${this.result.score}`, {
